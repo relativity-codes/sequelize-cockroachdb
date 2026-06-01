@@ -14,6 +14,23 @@
 
 'use strict';
 
+// Intercept require calls to load 'sequelize' from the parent application context.
+// This prevents multiple conflicting instances of Sequelize when developing/linking.
+const Module = require('module');
+const originalRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id.startsWith('sequelize') && this.filename.includes('sequelize-cockroachdb')) {
+    try {
+      const parentPaths = module.parent ? module.parent.paths : [];
+      const resolved = require.resolve(id, { paths: [process.cwd(), ...parentPaths] });
+      return originalRequire.call(this, resolved);
+    } catch (e) {
+      // Fallback to original require if resolution fails
+    }
+  }
+  return originalRequire.call(this, id);
+};
+
 // Ensure the user did not forget to install Sequelize.
 try {
   require('sequelize');
@@ -103,12 +120,65 @@ const {
 ConnectionManager.prototype.__loadDialectModule =
   ConnectionManager.prototype._loadDialectModule;
 ConnectionManager.prototype._loadDialectModule = function (...args) {
-  const pg = this.__loadDialectModule(...args);
-  pg.types.setTypeParser(20, function (val) {
-    if (val > Number.MAX_SAFE_INTEGER) return String(val);
-    else return parseInt(val, 10);
-  });
+  let pg = this.__loadDialectModule(...args);
+  if (args[0] === 'pg' && (!pg || !pg.types)) {
+    pg = require('pg');
+  }
+  if (pg && pg.types) {
+    pg.types.setTypeParser(20, function (val) {
+      if (val > Number.MAX_SAFE_INTEGER) return String(val);
+      else return parseInt(val, 10);
+    });
+  }
   return pg;
+};
+
+const PostgresConnectionManager = require('sequelize/lib/dialects/postgres/connection-manager');
+const originalConnect = PostgresConnectionManager.prototype.connect;
+PostgresConnectionManager.prototype.connect = async function (config) {
+  const connection = await originalConnect.call(this, config);
+  this.sequelize.isCockroachDB = true; // Default to true for CockroachDB package
+  try {
+    const result = await connection.query('SELECT version() AS version');
+    const versionStr = result.rows && result.rows[0] && result.rows[0].version;
+    if (versionStr) {
+      this.sequelize.isCockroachDB = versionStr.includes('CockroachDB');
+    }
+  } catch (err) {
+    // ignore
+  }
+
+  // Dynamically configure feature support flags if the target database is standard PostgreSQL
+  if (!this.sequelize.isCockroachDB) {
+    this.sequelize.dialect.supports.EXCEPTION = true;
+    this.sequelize.dialect.supports.lockOuterJoinFailure = true;
+    this.sequelize.dialect.supports.skipLocked = true;
+    this.sequelize.dialect.supports.lockKey = true;
+  }
+  return connection;
+};
+
+QueryGenerator.prototype.pgEnum = function (tableName, attr, dataType, options) {
+  const enumName = this.pgEnumName(tableName, attr, options);
+  let values;
+
+  if (dataType.values) {
+    values = `ENUM(${dataType.values.map(value => this.escape(value)).join(', ')})`;
+  } else {
+    values = dataType.toString().match(/^ENUM\(.+\)/)[0];
+  }
+
+  let sql;
+  if (this.sequelize.isCockroachDB) {
+    sql = `CREATE TYPE IF NOT EXISTS ${enumName} AS ${values};`;
+  } else {
+    sql = `DO ${this.escape(`BEGIN CREATE TYPE ${enumName} AS ${values}; EXCEPTION WHEN duplicate_object THEN null; END`)};`;
+  }
+
+  if (!!options && options.force === true) {
+    sql = this.pgEnumDrop(tableName, attr) + sql;
+  }
+  return sql;
 };
 
 QueryGenerator.prototype.__describeTableQuery =
@@ -302,6 +372,20 @@ Model.findOrCreate = async function findOrCreate(options) {
 DataTypes.postgres.GEOGRAPHY.prototype.bindParam = (value, options) => {
   return `ST_GeomFromGeoJSON(${options.bindParam(value)}::json)::geography`;
 }
+
+// [8] Handle SPATIAL indexes by mapping them to GIST indexes
+const originalAddIndexQuery = QueryGenerator.prototype.addIndexQuery;
+QueryGenerator.prototype.addIndexQuery = function (tableName, attributes, options, rawTablename) {
+  let opts = options;
+  if (!Array.isArray(attributes)) {
+    opts = attributes;
+  }
+  if (opts && typeof opts.type === 'string' && opts.type.toUpperCase() === 'SPATIAL') {
+    opts.using = 'gist';
+    delete opts.type;
+  }
+  return originalAddIndexQuery.call(this, tableName, attributes, options, rawTablename);
+};
 
 //// Done!
 
