@@ -67,7 +67,7 @@ after(async function () {
 });
 
 function makeTestSequelizeInstance() {
-  const dialectOptions = { cockroachdbTelemetryDisabled : true };
+  const dialectOptions = { cockroachdbTelemetryDisabled: true };
   if (process.env.DB_SSL === 'true') {
     dialectOptions.ssl = {
       rejectUnauthorized: false,
@@ -75,21 +75,28 @@ function makeTestSequelizeInstance() {
     };
     if (process.env.CA_CERT_PATH) {
       try {
-        dialectOptions.ssl.ca = fs.readFileSync(process.env.CA_CERT_PATH).toString();
+        dialectOptions.ssl.ca = fs
+          .readFileSync(process.env.CA_CERT_PATH)
+          .toString();
       } catch (e) {
         console.error('Failed to read CA certificate:', e.message);
       }
     }
   }
 
-  return new Sequelize(process.env.DB_NAME || 'sequelize_test', process.env.DB_USER || 'root', process.env.DB_PASS || '', {
-    dialect: 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 26257,
-    logging: false,
-    typeValidation: true,
-    dialectOptions: dialectOptions,
-  });
+  return new Sequelize(
+    process.env.DB_NAME || 'sequelize_test',
+    process.env.DB_USER || 'root',
+    process.env.DB_PASS || '',
+    {
+      dialect: 'postgres',
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 26257,
+      logging: false,
+      typeValidation: true,
+      dialectOptions: dialectOptions
+    }
+  );
 }
 
 module.exports = { makeTestSequelizeInstance };

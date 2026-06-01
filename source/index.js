@@ -19,10 +19,15 @@
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 Module.prototype.require = function (id) {
-  if (id.startsWith('sequelize') && this.filename.includes('sequelize-cockroachdb')) {
+  if (
+    id.startsWith('sequelize') &&
+    this.filename.includes('sequelize-cockroachdb')
+  ) {
     try {
       const parentPaths = module.parent ? module.parent.paths : [];
-      const resolved = require.resolve(id, { paths: [process.cwd(), ...parentPaths] });
+      const resolved = require.resolve(id, {
+        paths: [process.cwd(), ...parentPaths]
+      });
       return originalRequire.call(this, resolved);
     } catch (e) {
       // Fallback to original require if resolution fails
@@ -45,10 +50,10 @@ const { Sequelize, DataTypes, Model } = require('sequelize');
 const QueryGenerator = require('sequelize/lib/dialects/postgres/query-generator');
 
 // Ensure Sequelize version compatibility.
-const version_helper = require ('./version_helper.js')
+const version_helper = require('./version_helper.js');
 const semver = require('semver');
 
-const sequelizeVersion = version_helper.GetSequelizeVersion()
+const sequelizeVersion = version_helper.GetSequelizeVersion();
 
 if (semver.satisfies(sequelizeVersion, '<=4')) {
   throw new Error(
@@ -56,7 +61,7 @@ if (semver.satisfies(sequelizeVersion, '<=4')) {
   );
 }
 
-require('./telemetry.js')
+require('./telemetry.js');
 
 //// [1] Override the `upsert` query method from Sequelize v5 to make it work with CockroachDB
 if (semver.satisfies(sequelizeVersion, '5.x')) {
@@ -98,17 +103,16 @@ PostgresDialect.prototype.supports.lockKey = false;
   // invalid integers.
   intType.prototype.escape = false;
 
-  intType.prototype.$stringify = intType.prototype._stringify = function stringify(
-    value
-  ) {
-    var rep = String(value);
-    if (!/^[-+]?[0-9]+$/.test(rep)) {
-      throw new Sequelize.ValidationError(
-        util.format('%j is not a valid integer', value)
-      );
-    }
-    return rep;
-  };
+  intType.prototype.$stringify = intType.prototype._stringify =
+    function stringify(value) {
+      var rep = String(value);
+      if (!/^[-+]?[0-9]+$/.test(rep)) {
+        throw new Sequelize.ValidationError(
+          util.format('%j is not a valid integer', value)
+        );
+      }
+      return rep;
+    };
 });
 
 // [4] Fix int to string conversion
@@ -158,12 +162,19 @@ PostgresConnectionManager.prototype.connect = async function (config) {
   return connection;
 };
 
-QueryGenerator.prototype.pgEnum = function (tableName, attr, dataType, options) {
+QueryGenerator.prototype.pgEnum = function (
+  tableName,
+  attr,
+  dataType,
+  options
+) {
   const enumName = this.pgEnumName(tableName, attr, options);
   let values;
 
   if (dataType.values) {
-    values = `ENUM(${dataType.values.map(value => this.escape(value)).join(', ')})`;
+    values = `ENUM(${dataType.values
+      .map(value => this.escape(value))
+      .join(', ')})`;
   } else {
     values = dataType.toString().match(/^ENUM\(.+\)/)[0];
   }
@@ -172,7 +183,9 @@ QueryGenerator.prototype.pgEnum = function (tableName, attr, dataType, options) 
   if (this.sequelize.isCockroachDB) {
     sql = `CREATE TYPE IF NOT EXISTS ${enumName} AS ${values};`;
   } else {
-    sql = `DO ${this.escape(`BEGIN CREATE TYPE ${enumName} AS ${values}; EXCEPTION WHEN duplicate_object THEN null; END`)};`;
+    sql = `DO ${this.escape(
+      `BEGIN CREATE TYPE ${enumName} AS ${values}; EXCEPTION WHEN duplicate_object THEN null; END`
+    )};`;
   }
 
   if (!!options && options.force === true) {
@@ -198,7 +211,10 @@ QueryGenerator.prototype.describeTableQuery = function (...args) {
       // Change unimplemented column
       .replace('relid', 'oid')
       // Aggregate enums in sort order
-      .replace('array_agg(e.enumlabel)', 'array_agg(e.enumlabel ORDER BY e.enumsortorder ASC)')
+      .replace(
+        'array_agg(e.enumlabel)',
+        'array_agg(e.enumlabel ORDER BY e.enumsortorder ASC)'
+      )
   );
 };
 
@@ -371,20 +387,35 @@ Model.findOrCreate = async function findOrCreate(options) {
 // Got to explicitly cast it is a GEOGRAPHY type.
 DataTypes.postgres.GEOGRAPHY.prototype.bindParam = (value, options) => {
   return `ST_GeomFromGeoJSON(${options.bindParam(value)}::json)::geography`;
-}
+};
 
 // [8] Handle SPATIAL indexes by mapping them to GIST indexes
 const originalAddIndexQuery = QueryGenerator.prototype.addIndexQuery;
-QueryGenerator.prototype.addIndexQuery = function (tableName, attributes, options, rawTablename) {
+QueryGenerator.prototype.addIndexQuery = function (
+  tableName,
+  attributes,
+  options,
+  rawTablename
+) {
   let opts = options;
   if (!Array.isArray(attributes)) {
     opts = attributes;
   }
-  if (opts && typeof opts.type === 'string' && opts.type.toUpperCase() === 'SPATIAL') {
+  if (
+    opts &&
+    typeof opts.type === 'string' &&
+    opts.type.toUpperCase() === 'SPATIAL'
+  ) {
     opts.using = 'gist';
     delete opts.type;
   }
-  return originalAddIndexQuery.call(this, tableName, attributes, options, rawTablename);
+  return originalAddIndexQuery.call(
+    this,
+    tableName,
+    attributes,
+    options,
+    rawTablename
+  );
 };
 
 //// Done!
